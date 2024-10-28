@@ -14,11 +14,12 @@
 # ==============================================================================
 """Gradient transformations for accumulating gradients across updates."""
 
-from typing import Any, Callable, NamedTuple, Optional, Protocol, Union
+from collections.abc import Callable
+from typing import Any, NamedTuple, Optional, Protocol, Union
 
 import chex
+import jax
 from jax import lax
-from jax import tree_util as jtu
 import jax.numpy as jnp
 
 from optax import tree_utils as otu
@@ -63,8 +64,8 @@ def trace(
   def update_fn(updates, state, params=None):
     del params
     f = lambda g, t: g + decay * t
-    new_trace = jtu.tree_map(f, updates, state.trace)
-    updates = jtu.tree_map(f, updates, new_trace) if nesterov else new_trace
+    new_trace = jax.tree.map(f, updates, state.trace)
+    updates = jax.tree.map(f, updates, new_trace) if nesterov else new_trace
     new_trace = otu.tree_cast(new_trace, accumulator_dtype)
     return updates, TraceState(trace=new_trace)
 
@@ -109,7 +110,7 @@ def ema(
     del params
     updates = new_ema = otu.tree_update_moment(
         updates, state.ema, decay, order=1)
-    count_inc = utils.safe_int32_increment(state.count)
+    count_inc = numerics.safe_increment(state.count)
     if debias:
       updates = otu.tree_bias_correction(new_ema, decay, count_inc)
     state_ema = otu.tree_cast(new_ema, accumulator_dtype)
@@ -165,7 +166,7 @@ def skip_not_finite(
   """
   del gradient_step, params
   all_is_finite = [jnp.sum(jnp.logical_not(jnp.isfinite(p)))
-                   for p in jtu.tree_leaves(updates)]
+                   for p in jax.tree.leaves(updates)]
   num_not_finite = jnp.sum(jnp.array(all_is_finite))
   should_skip = num_not_finite > 0
   return should_skip, dict(should_skip=should_skip,
@@ -195,7 +196,7 @@ def skip_large_updates(
   """
   del gradient_step, params
   norm_sq = jnp.sum(
-      jnp.array([jnp.sum(p**2) for p in jtu.tree_leaves(updates)]))
+      jnp.array([jnp.sum(p**2) for p in jax.tree.leaves(updates)]))
   # This will also return True if `norm_sq` is NaN.
   should_skip = jnp.logical_not(norm_sq < max_squared_norm)
   return should_skip, dict(should_skip=should_skip, norm_squared=norm_sq)
@@ -209,7 +210,7 @@ class MultiStepsState(NamedTuple):
       1 or is reset to 0.
     gradient_step: gradient step counter. This only increases after enough
       mini-steps have been accumulated.
-    inner_opt_state: the state of the wrapped optimiser.
+    inner_opt_state: the state of the wrapped optimizer.
     acc_grads: accumulated gradients over multiple mini-steps.
     skip_state: an arbitrarily py tree. This is only relevant when passing
       a `should_skip_update_fn` to `MultiSteps`.
@@ -246,7 +247,7 @@ class MultiSteps:
       use_grad_mean: bool = True,
       should_skip_update_fn: Optional[ShouldSkipUpdateFunction] = None):
     # pylint: disable=line-too-long
-    """Initialiser.
+    """Initializer.
 
     Args:
       opt: the wrapped optimizer.
@@ -333,10 +334,8 @@ class MultiSteps:
 
     # Note: we do not enclose variables to allow JAX to re-use memory buffers.
     def _do_update(updates, state, params):
-      acc_grads = jtu.tree_map(
-          lambda upd, acc: self._acc_update(
-              upd, acc, n_acc=state.mini_step
-          ).astype(acc.dtype),
+      acc_grads = jax.tree.map(
+          lambda upd, acc: self._acc_update(upd, acc, n_acc=state.mini_step),
           updates,
           state.acc_grads,
       )
@@ -347,38 +346,56 @@ class MultiSteps:
 
       emit = state.mini_step == (k_steps - 1)
       new_state = MultiStepsState(
-          mini_step=numerics.safe_int32_increment(state.mini_step) % k_steps,
+          mini_step=numerics.safe_increment(state.mini_step) % k_steps,
           gradient_step=emit
-          * numerics.safe_int32_increment(state.gradient_step)
+          * numerics.safe_increment(state.gradient_step)
           + (1 - emit) * state.gradient_step,
-          inner_opt_state=jtu.tree_map(
-              lambda st, nst: jnp.where(emit, nst, st).astype(st.dtype),
+          inner_opt_state=jax.tree.map(
+              lambda st, nst: jnp.where(emit, nst, st),
               state.inner_opt_state,
               new_inner_state,
           ),
-          acc_grads=jtu.tree_map(
-              lambda ga: (1 - emit) * ga, acc_grads
+          acc_grads=jax.tree.map(
+              lambda ga, upd: (1 - emit) * ga.astype(upd.dtype),
+              acc_grads,
+              final_updates,
           ),
           skip_state=skip_state,
       )
 
-      final_updates = jtu.tree_map(
-          lambda ga, st: jnp.array(emit * ga, dtype=st.dtype),
-          final_updates,
-          state.acc_grads
+      final_updates = jax.tree.map(
+          lambda ga: emit * ga, final_updates
       )
       return final_updates, new_state
 
     def _skip_update(updates, state, params):
-      del updates, params
+      # Create new skip state with correct dtype
+      zero_updates, new_inner_state = jax.eval_shape(
+          self._opt.update,
+          updates,
+          state.inner_opt_state,
+          params=params,
+          **extra_args
+      )
+      zero_updates = otu.tree_zeros_like(zero_updates)
+
       multi_state_when_skip = MultiStepsState(
           mini_step=state.mini_step,
           gradient_step=state.gradient_step,
-          inner_opt_state=state.inner_opt_state,
-          acc_grads=state.acc_grads,
+          inner_opt_state=jax.tree.map(
+            lambda x, y: (
+              x.astype(y.dtype) if isinstance(x, jnp.ndarray) else x
+            ),
+            state.inner_opt_state, new_inner_state
+          ),
+          acc_grads=jax.tree.map(
+              lambda acc, upd: acc.astype(upd.dtype),
+              state.acc_grads,
+              zero_updates,
+          ),
           skip_state=skip_state,
       )
-      zero_updates = otu.tree_zeros_like(state.acc_grads)
+
       return zero_updates, multi_state_when_skip
 
     new_updates, new_state = lax.cond(

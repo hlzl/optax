@@ -14,8 +14,9 @@
 # ==============================================================================
 """Line-searches."""
 
+from collections.abc import Callable
 import functools
-from typing import Any, Callable, NamedTuple, Optional, Union
+from typing import Any, NamedTuple, Optional, Union
 
 import chex
 import jax
@@ -224,7 +225,7 @@ def scale_by_backtracking_linesearch(
       optimize.
     * ``**extra_args``: additional keyword arguments, if the function needs
       additional arguments such as input data, they should be put there (
-      see example in this docstrihng).
+      see example in this docstring).
   """
 
   def init_fn(params: base.Params) -> ScaleByBacktrackingLinesearchState:
@@ -712,7 +713,7 @@ def zoom_linesearch(
       jax.lax.cond(
           state.safe_stepsize > 0.0,
           lambda *_: jax.debug.print(
-              FLAG_CURVATURE_COND_NOT_SATSIFIED
+              FLAG_CURVATURE_COND_NOT_SATISFIED
           ),
           _failure_diagnostic,
           state,
@@ -825,12 +826,12 @@ def zoom_linesearch(
           (max_stepsize_reached & ~interval_found),
           FLAG_INTERVAL_NOT_FOUND
           + "\n"
-          + FLAG_CURVATURE_COND_NOT_SATSIFIED,
+          + FLAG_CURVATURE_COND_NOT_SATISFIED,
       )
     failed = (iter_num + 1 >= max_linesearch_steps) & (~done)
 
     new_state = ZoomLinesearchState(
-        count=numerics.safe_int32_increment(iter_num),
+        count=numerics.safe_increment(iter_num),
         #
         params=params,
         updates=updates,
@@ -1002,7 +1003,7 @@ def zoom_linesearch(
     )
     failed = presumably_failed & ~done
     new_state = ZoomLinesearchState(
-        count=numerics.safe_int32_increment(iter_num),
+        count=numerics.safe_increment(iter_num),
         #
         params=params,
         updates=updates,
@@ -1525,7 +1526,7 @@ FLAG_INTERVAL_TOO_SMALL = (
     WARNING_PREAMBLE
     + "Length of searched interval has been reduced below threshold."
 )
-FLAG_CURVATURE_COND_NOT_SATSIFIED = (
+FLAG_CURVATURE_COND_NOT_SATISFIED = (
     WARNING_PREAMBLE
     + "Returning stepsize with sufficient decrease "
     "but curvature condition not satisfied."

@@ -25,13 +25,13 @@ Numerical Stability
 .. currentmodule:: optax
 
 .. autosummary::
-    safe_int32_increment
+    safe_increment
     safe_norm
     safe_root_mean_squares
 
-Safe int32 increment
-~~~~~~~~~~~~~~~~~~~~
-.. autofunction:: safe_int32_increment
+Safe increment
+~~~~~~~~~~~~~~
+.. autofunction:: safe_increment
 
 Safe norm
 ~~~~~~~~~
@@ -92,7 +92,9 @@ Tree
     NamedTupleKey
     tree_add
     tree_add_scalar_mul
+    tree_cast
     tree_div
+    tree_dtype
     tree_get
     tree_get_all_with_path
     tree_l1_norm
@@ -101,6 +103,7 @@ Tree
     tree_mul
     tree_ones_like
     tree_random_like
+    tree_split_key_like
     tree_scalar_mul
     tree_set
     tree_sub
@@ -120,6 +123,14 @@ Tree add
 Tree add and scalar multiply
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .. autofunction:: tree_add_scalar_mul
+
+Tree cast
+~~~~~~~~~
+.. autofunction:: tree_cast
+
+Tree data type
+~~~~~~~~~~~~~~
+.. autofunction:: tree_dtype
 
 Tree divide
 ~~~~~~~~~~~
@@ -152,6 +163,10 @@ Tree multiply
 Tree ones like
 ~~~~~~~~~~~~~~
 .. autofunction:: tree_ones_like
+
+Split key according to structure of a tree
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. autofunction:: tree_split_key_like
 
 Tree with random values
 ~~~~~~~~~~~~~~~~~~~~~~~

@@ -14,7 +14,8 @@
 # ==============================================================================
 """Base interfaces and datatypes."""
 
-from typing import Any, Callable, NamedTuple, Optional, Protocol, runtime_checkable, Sequence, Union
+from collections.abc import Callable
+from typing import Any, NamedTuple, Optional, Protocol, runtime_checkable, Sequence, Union
 
 import chex
 import jax
@@ -84,7 +85,7 @@ class TransformUpdateFn(Protocol):
 
   The `update` step takes a tree of candidate parameter `updates` (e.g. their
   gradient with respect to some loss), an arbitrary structured `state`, and the
-  current `params` of the model being optimised. The `params` argument is
+  current `params` of the model being optimized. The `params` argument is
   optional, it must however be provided when using transformations that require
   access to the current values of the parameters.
 
@@ -160,7 +161,7 @@ class GradientTransformation(NamedTuple):
 
   Note that an extended API is provided for users wishing to build optimizers
   that take additional arguments during the update step. For more details,
-  see ``GradientTransoformationExtraArgs``.
+  see :func:`optax.GradientTransoformationExtraArgs`.
 
   Since gradient transformations do not contain any internal state, all stateful
   optimizer properties (such as the current step count when using optimizer
@@ -170,9 +171,9 @@ class GradientTransformation(NamedTuple):
   passed to the next call to the gradient transformation.
 
   Since gradient transformations are pure, idempotent functions, the only way
-  to change the behaviour of a gradient transformation between steps, is to
+  to change the behavior of a gradient transformation between steps, is to
   change the values in the optimizer state. To see an example of mutating the
-  optimizer state in order to control the behaviour of an optax gradient
+  optimizer state in order to control the behavior of an optax gradient
   transformation see the `meta-learning example <https://optax.readthedocs.io/en/latest/_collections/examples/meta_learning.html>`_ in the optax documentation.
 
   Attributes:
@@ -262,7 +263,7 @@ def set_to_zero() -> GradientTransformation:
 
   def update_fn(updates, state, params=None):
     del params  # Unused by the zero transform.
-    return jax.tree_util.tree_map(jnp.zeros_like, updates), state
+    return jax.tree.map(jnp.zeros_like, updates), state
 
   return GradientTransformation(init_empty_state, update_fn)
 
@@ -297,7 +298,7 @@ def stateless_with_tree_map(
 
   This wrapper eliminates the boilerplate needed to create a transformation that
   does not require saved state between iterations, just like optax.stateless.
-  In addition, this function will apply the tree_map over update/params for you.
+  In addition, this function will apply the tree map over update/params for you.
 
   Args:
     f: Update function that takes in an update array (e.g. gradients) and
@@ -311,10 +312,10 @@ def stateless_with_tree_map(
   def update_fn(updates, state, params=None):
     del state
     if params is not None:
-      return jax.tree_util.tree_map(f, updates, params), EmptyState()
+      return jax.tree.map(f, updates, params), EmptyState()
     else:
       f_ = lambda u: f(u, None)
-      return jax.tree_util.tree_map(f_, updates), EmptyState()
+      return jax.tree.map(f_, updates), EmptyState()
 
   return GradientTransformation(init_empty_state, update_fn)
 

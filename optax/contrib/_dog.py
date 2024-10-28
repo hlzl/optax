@@ -22,16 +22,16 @@ References:
   Gradient Descent Method<https://arxiv.org/pdf/2305.16284>`_, 2023.
 """
 
-from typing import Any, Callable, NamedTuple, Optional, Union
+from collections.abc import Callable
+from typing import Any, NamedTuple, Optional, Union
 
 import chex
 import jax
 import jax.numpy as jnp
-import jax.tree_util as jtu
-from optax import tree_utils as otu
 from optax._src import base
 from optax._src import combine
 from optax._src import transform
+import optax.tree_utils as otu
 
 
 class DoGState(NamedTuple):
@@ -90,11 +90,15 @@ def scale_by_dog(
   """
 
   def init_fn(params: base.Params) -> DoGState:
+    # Define state parameters with the lowest dtype of the parameters to avoid
+    # dtype promotion of parameters resulting in a dtype mismatch between
+    # parameters and updates.
+    params_dtype = otu.tree_dtype(params, 'lowest')
     return DoGState(
         first_step=jnp.asarray(True),
         init_params=otu.tree_zeros_like(params),
-        estim_dist=jnp.asarray(0.0),
-        sum_sq_norm_grads=jnp.asarray(0.0),
+        estim_dist=jnp.asarray(0.0, dtype=params_dtype),
+        sum_sq_norm_grads=jnp.asarray(0.0, dtype=params_dtype),
     )
 
   def update_fn(
@@ -106,7 +110,7 @@ def scale_by_dog(
     curr_distance = jnp.where(
         state.first_step, reps_rel * (1 + curr_distance), curr_distance
     )
-    init_params = jtu.tree_map(
+    init_params = jax.tree.map(
         lambda p, ip: jnp.where(state.first_step, p, ip),
         params,
         state.init_params,
@@ -171,11 +175,11 @@ def dog(
     ...    grad, opt_state, params, value=value)
     ...  params = optax.apply_updates(params, updates)
     ...  print('Objective function: ', f(params))
-    Objective function:  13.999964
-    Objective function:  13.999941
-    Objective function:  13.999905
-    Objective function:  13.999857
-    Objective function:  13.999794
+    Objective function:  13.99...
+    Objective function:  13.99...
+    Objective function:  13.99...
+    Objective function:  13.99...
+    Objective function:  13.99...
 
   References:
     Ivgi et al., `DoG is SGD's Best Friend: A Parameter-Free Dynamic Step
@@ -253,14 +257,18 @@ def scale_by_dowg(
   """
 
   def init_fn(params: base.Params) -> DoWGState:
+    # Define state parameters with the lowest dtype of the parameters to avoid
+    # dtype promotion of parameters resulting in a dtype mismatch between
+    # parameters and updates.
+    params_dtype = otu.tree_dtype(params, 'lowest')
     if init_estim_sq_dist is None:
       init_estim_sq_dist_ = eps
     else:
       init_estim_sq_dist_ = init_estim_sq_dist
     return DoWGState(
         init_params=params,
-        estim_sq_dist=jnp.asarray(init_estim_sq_dist_),
-        weighted_sq_norm_grads=jnp.asarray(0.0),
+        estim_sq_dist=jnp.asarray(init_estim_sq_dist_, dtype=params_dtype),
+        weighted_sq_norm_grads=jnp.asarray(0.0, dtype=params_dtype),
     )
 
   def update_fn(

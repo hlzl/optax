@@ -17,9 +17,11 @@
 # pylint: disable=wrong-import-position
 # pylint: disable=g-importing-member
 
+from optax import assignment
 from optax import contrib
 from optax import losses
 from optax import monte_carlo
+from optax import perturbations
 from optax import projections
 from optax import schedules
 from optax import second_order
@@ -33,6 +35,7 @@ from optax._src.alias import adam
 from optax._src.alias import adamax
 from optax._src.alias import adamaxw
 from optax._src.alias import adamw
+from optax._src.alias import adan
 from optax._src.alias import amsgrad
 from optax._src.alias import fromage
 from optax._src.alias import lamb
@@ -44,6 +47,7 @@ from optax._src.alias import nadam
 from optax._src.alias import nadamw
 from optax._src.alias import noisy_sgd
 from optax._src.alias import novograd
+from optax._src.alias import optimistic_adam
 from optax._src.alias import optimistic_gradient_descent
 from optax._src.alias import polyak_sgd
 from optax._src.alias import radam
@@ -99,6 +103,7 @@ from optax._src.linesearch import ZoomLinesearchInfo
 from optax._src.lookahead import lookahead
 from optax._src.lookahead import LookaheadParams
 from optax._src.lookahead import LookaheadState
+from optax._src.numerics import safe_increment
 from optax._src.numerics import safe_int32_increment
 from optax._src.numerics import safe_norm
 from optax._src.numerics import safe_root_mean_squares
@@ -116,6 +121,7 @@ from optax._src.transform import scale
 from optax._src.transform import scale_by_adadelta
 from optax._src.transform import scale_by_adam
 from optax._src.transform import scale_by_adamax
+from optax._src.transform import scale_by_adan
 from optax._src.transform import scale_by_amsgrad
 from optax._src.transform import scale_by_belief
 from optax._src.transform import scale_by_distance_over_gradients
@@ -139,6 +145,7 @@ from optax._src.transform import scale_by_trust_ratio
 from optax._src.transform import scale_by_yogi
 from optax._src.transform import ScaleByAdaDeltaState
 from optax._src.transform import ScaleByAdamState
+from optax._src.transform import ScaleByAdanState
 from optax._src.transform import ScaleByAmsgradState
 from optax._src.transform import ScaleByBeliefState
 from optax._src.transform import ScaleByLBFGSState
@@ -293,6 +300,7 @@ __all__ = (
     "adamax",
     "adamaxw",
     "adamw",
+    "adan",
     "adaptive_grad_clip",
     "AdaptiveGradClipState",
     "add_decayed_weights",
@@ -305,6 +313,7 @@ __all__ = (
     "apply_updates",
     "ApplyEvery",
     "ApplyIfFiniteState",
+    "assignment",
     "centralize",
     "chain",
     "clip_by_block_rms",
@@ -387,6 +396,7 @@ __all__ = (
     "radam",
     "rmsprop",
     "rprop",
+    "safe_increment",
     "safe_int32_increment",
     "safe_norm",
     "safe_root_mean_squares",
@@ -394,6 +404,7 @@ __all__ = (
     "scale_by_adadelta",
     "scale_by_adam",
     "scale_by_adamax",
+    "scale_by_adan",
     "scale_by_amsgrad",
     "scale_by_backtracking_linesearch",
     "scale_by_belief",
@@ -419,6 +430,7 @@ __all__ = (
     "scale",
     "ScaleByAdaDeltaState",
     "ScaleByAdamState",
+    "ScaleByAdanState",
     "ScaleByAmsgradState",
     "ScaleByBacktrackingLinesearchState",
     "ScaleByBeliefState",

@@ -12,21 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Tests for `alias.py`."""
+"""Tests for methods defined in `alias.py`."""
 
-from typing import Any, Callable, Union
+from collections.abc import Callable
+from typing import Any, Union
 
 from absl.testing import absltest
 from absl.testing import parameterized
-
 import chex
 import jax
 from jax import flatten_util
 import jax.numpy as jnp
 import jax.random as jrd
-import jax.tree_util as jtu
 import numpy as np
-
 from optax._src import alias
 from optax._src import base
 from optax._src import linesearch as _linesearch
@@ -35,8 +33,8 @@ from optax._src import transform
 from optax._src import update
 from optax.losses import _classification
 from optax.schedules import _inject
+from optax.transforms import _accumulation
 import optax.tree_utils as otu
-
 import scipy.optimize as scipy_optimize
 from sklearn import datasets
 from sklearn import linear_model
@@ -56,6 +54,7 @@ _OPTIMIZERS_UNDER_TEST = (
     dict(opt_name='adamw', opt_kwargs=dict(learning_rate=1e-1)),
     dict(opt_name='adamax', opt_kwargs=dict(learning_rate=1e-1)),
     dict(opt_name='adamaxw', opt_kwargs=dict(learning_rate=1e-1)),
+    dict(opt_name='adan', opt_kwargs=dict(learning_rate=1e-1)),
     dict(opt_name='amsgrad', opt_kwargs=dict(learning_rate=1e-1)),
     dict(opt_name='lars', opt_kwargs=dict(learning_rate=1.0)),
     dict(opt_name='lamb', opt_kwargs=dict(learning_rate=1e-3)),
@@ -71,6 +70,10 @@ _OPTIMIZERS_UNDER_TEST = (
         opt_name='optimistic_gradient_descent',
         opt_kwargs=dict(learning_rate=2e-3, alpha=0.7, beta=0.1),
     ),
+    dict(
+        opt_name='optimistic_adam',
+        opt_kwargs=dict(learning_rate=2e-3),
+    ),
     dict(opt_name='rmsprop', opt_kwargs=dict(learning_rate=5e-3)),
     dict(opt_name='rmsprop', opt_kwargs=dict(learning_rate=5e-3, momentum=0.9)),
     dict(opt_name='sign_sgd', opt_kwargs=dict(learning_rate=1e-1)),
@@ -80,7 +83,7 @@ _OPTIMIZERS_UNDER_TEST = (
     dict(opt_name='rprop', opt_kwargs=dict(learning_rate=1e-1)),
     dict(opt_name='sm3', opt_kwargs=dict(learning_rate=1.0)),
     dict(opt_name='yogi', opt_kwargs=dict(learning_rate=1e-1)),
-    dict(opt_name='polyak_sgd', opt_kwargs=dict(max_learning_rate=1.))
+    dict(opt_name='polyak_sgd', opt_kwargs=dict(max_learning_rate=1.0)),
 )
 
 
@@ -110,8 +113,9 @@ def _setup_rosenbrock(dtype):
   final_params = jnp.array([a, a**2], dtype=dtype)
 
   def objective(params):
-    return (numerics.abs_sq(a - params[0]) +
-            b * numerics.abs_sq(params[1] - params[0]**2))
+    return numerics.abs_sq(a - params[0]) + b * numerics.abs_sq(
+        params[1] - params[0] ** 2
+    )
 
   return initial_params, final_params, objective
 
@@ -129,9 +133,11 @@ class AliasTest(chex.TestCase):
         'noisy_sgd',
         'sm3',
         'optimistic_gradient_descent',
+        'optimistic_adam',
         'lion',
         'rprop',
         'adadelta',
+        'adan',
         'polyak_sgd',
         'sign_sgd',
     ) and jnp.iscomplexobj(dtype):
@@ -153,7 +159,7 @@ class AliasTest(chex.TestCase):
       value, updates = jax.value_and_grad(objective)(params)
       # Complex gradients need to be conjugated before being added to parameters
       # https://gist.github.com/wdphy16/118aef6fb5f82c49790d7678cf87da29
-      updates = jax.tree_util.tree_map(lambda x: x.conj(), updates)
+      updates = jax.tree.map(lambda x: x.conj(), updates)
       if opt_name == 'polyak_sgd':
         update_kwargs = {'value': value}
       else:
@@ -164,18 +170,22 @@ class AliasTest(chex.TestCase):
 
     params = initial_params
     state = opt.init(params)
-    # A no-op change, to verify that tree map works.
-    state = otu.tree_map_params(opt, lambda v: v, state)
 
-    for _ in range(10000):
-      params, state = step(params, state)
+    with self.subTest('Test that tree_map_params works'):
+      # A no-op change, to verify that tree map works.
+      state = otu.tree_map_params(opt, lambda v: v, state)
 
-    chex.assert_trees_all_close(params, final_params, rtol=3e-2, atol=3e-2)
+    with self.subTest('Test that optimization works'):
+      for _ in range(10000):
+        params, state = step(params, state)
+
+      chex.assert_trees_all_close(params, final_params, rtol=3e-2, atol=3e-2)
 
   @chex.all_variants
   @parameterized.product(_OPTIMIZERS_UNDER_TEST)
   def test_optimizers_can_be_wrapped_in_inject_hyperparams(
-      self, opt_name, opt_kwargs):
+      self, opt_name, opt_kwargs
+  ):
     """Checks that optimizers can be wrapped in inject_hyperparams."""
     # See also https://github.com/google-deepmind/optax/issues/412.
     opt_factory = getattr(alias, opt_name)
@@ -185,7 +195,8 @@ class AliasTest(chex.TestCase):
       # argument to be specified in order to be jittable. See issue
       # https://github.com/google-deepmind/optax/issues/412.
       opt_inject = _inject.inject_hyperparams(
-          opt_factory, static_args=('min_dim_size_to_factor',))(**opt_kwargs)
+          opt_factory, static_args=('min_dim_size_to_factor',)
+      )(**opt_kwargs)
     else:
       opt_inject = _inject.inject_hyperparams(opt_factory)(**opt_kwargs)
 
@@ -194,7 +205,7 @@ class AliasTest(chex.TestCase):
 
     state = self.variant(opt.init)(params)
     if opt_name == 'polyak_sgd':
-      update_kwargs = {'value': jnp.array(0.)}
+      update_kwargs = {'value': jnp.array(0.0)}
     else:
       update_kwargs = {}
     updates, new_state = self.variant(opt.update)(
@@ -203,31 +214,98 @@ class AliasTest(chex.TestCase):
 
     state_inject = self.variant(opt_inject.init)(params)
     updates_inject, new_state_inject = self.variant(opt_inject.update)(
-        grads, state_inject, params, **update_kwargs)
+        grads, state_inject, params, **update_kwargs
+    )
 
     with self.subTest('Equality of updates.'):
       chex.assert_trees_all_close(updates_inject, updates, rtol=1e-4)
     with self.subTest('Equality of new optimizer states.'):
       chex.assert_trees_all_close(
-          new_state_inject.inner_state, new_state, rtol=1e-4)
+          new_state_inject.inner_state, new_state, rtol=1e-4
+      )
 
-  @parameterized.named_parameters([
-      ('float32', 'float32'),
-      ('bfloat16', 'bfloat16'),
-      ('complex64', 'complex64'),
-      ('None', None),
-  ])
-  def test_explicit_dtype(self, dtype):
-    expected_dtype = jax.dtypes.canonicalize_dtype(dtype)  # None -> float32
-    tx = alias.sgd(0.1, momentum=0.9, accumulator_dtype=dtype)
-    trace_state, _ = tx.init(jnp.array([0.0, 0.0]))
-    self.assertEqual(expected_dtype, getattr(trace_state, 'trace').dtype)
-    tx = alias.adam(0.1, mu_dtype=dtype)
-    adam_state, _ = tx.init(jnp.array([0.0, 0.0]))
-    self.assertEqual(expected_dtype, getattr(adam_state, 'mu').dtype)
-    tx = alias.adamw(0.1, mu_dtype=dtype)
-    adam_state, _, _ = tx.init(jnp.array([0.0, 0.0]))
-    self.assertEqual(expected_dtype, getattr(adam_state, 'mu').dtype)
+  @parameterized.product(
+      params_dtype=('bfloat16', 'float32', 'complex64', None),
+      state_dtype=('bfloat16', 'float32', 'complex64', None),
+      opt_name=('sgd_mom', 'adam', 'adamw'),
+  )
+  def test_explicit_dtype(self, params_dtype, state_dtype, opt_name):
+    if opt_name == 'sgd_mom':
+      opt = alias.sgd(0.1, momentum=0.9, accumulator_dtype=state_dtype)
+      attribute_name = 'trace'
+    elif opt_name in ['adam', 'adamw']:
+      opt = getattr(alias, opt_name)(0.1, mu_dtype=state_dtype)
+      attribute_name = 'mu'
+    else:
+      raise ValueError(f'Unsupported optimizer: {opt_name}')
+
+    params_dtype = jax.dtypes.canonicalize_dtype(params_dtype)
+    params = jnp.array([0.0, 0.0], dtype=params_dtype)
+    state = opt.init(params)
+
+    with self.subTest('Test that attribute dtype is correct'):
+      if state_dtype is None:
+        expected_dtype = params_dtype
+      else:
+        expected_dtype = jax.dtypes.canonicalize_dtype(state_dtype)
+      attribute = otu.tree_get(state, attribute_name)
+      self.assertEqual(expected_dtype, attribute.dtype)
+
+  # Not testing with `without_device=True` because without_device set the
+  # variables to the host which appears to convert then the dtype, so we
+  # lose control of the dtype and the test fails.
+  @chex.variants(
+      with_jit=True, without_jit=True, with_device=True, with_pmap=True
+  )
+  @parameterized.product(_OPTIMIZERS_UNDER_TEST, dtype=('bfloat16', 'float32'))
+  def test_preserve_dtype(self, opt_name, opt_kwargs, dtype):
+    """Test that the optimizers return updates of same dtype as gradients."""
+    # When debugging this test, note that operations like
+    # x = 0.5**jnp.asarray(1, dtype=jnp.int32)
+    # (appearing in e.g. optax.tree_utils.tree_bias_correction)
+    # are promoted (strictly) to float32 when jitted
+    # see https://github.com/google/jax/issues/23337
+    # This may end up letting updates have a dtype different from params.
+    # The solution is to fix the dtype of the result to the desired dtype
+    # (just as done in optax.tree_utils.tree_bias_correction).
+    dtype = jnp.dtype(dtype)
+    opt_factory = getattr(alias, opt_name)
+    opt = opt_factory(**opt_kwargs)
+    fun = lambda x: jnp.sum(x**2)
+
+    params = jnp.array([1.0, 2.0], dtype=dtype)
+    grads = jax.grad(fun)(params)
+    state = self.variant(opt.init)(params)
+    if opt_name == 'polyak_sgd':
+      update_kwargs = {'value': fun(params)}
+    else:
+      update_kwargs = {}
+    updates, _ = self.variant(opt.update)(grads, state, params, **update_kwargs)
+    self.assertEqual(updates.dtype, grads.dtype)
+
+  @chex.variants(
+      with_jit=True, without_jit=True, with_device=True, with_pmap=True
+  )
+  @parameterized.product(_OPTIMIZERS_UNDER_TEST, dtype=('bfloat16', 'float32'))
+  def test_gradient_accumulation(self, opt_name, opt_kwargs, dtype):
+    """Test that the optimizers can safely be used with optax.MultiSteps."""
+    # Checks for issues like https://github.com/google-deepmind/optax/issues/377
+    dtype = jnp.dtype(dtype)
+    opt_factory = getattr(alias, opt_name)
+    base_opt = opt_factory(**opt_kwargs)
+    opt = _accumulation.MultiSteps(base_opt, every_k_schedule=4)
+
+    fun = lambda x: jnp.sum(x**2)
+
+    params = jnp.array([1.0, 2.0], dtype=dtype)
+    grads = jax.grad(fun)(params)
+    state = self.variant(opt.init)(params)
+    if opt_name == 'polyak_sgd':
+      update_kwargs = {'value': fun(params)}
+    else:
+      update_kwargs = {}
+    updates, _ = self.variant(opt.update)(grads, state, params, **update_kwargs)
+    chex.assert_trees_all_equal(updates, jnp.zeros_like(grads))
 
 
 ##########################
@@ -248,6 +326,7 @@ def _run_lbfgs_solver(
 ) -> tuple[chex.ArrayTree, base.OptState]:
   """Run LBFGS solver by iterative calls to grad transform and apply_updates."""
   value_and_grad_fun = jax.value_and_grad(fun)
+
   def stopping_criterion(carry):
     _, _, count, grad = carry
     return (otu.tree_l2_norm(grad) >= tol) & (count < maxiter)
@@ -259,7 +338,7 @@ def _run_lbfgs_solver(
         grad, state, params, value=value, grad=grad, value_fn=fun
     )
     params = update.apply_updates(params, updates)
-    return params, state, count+1, grad
+    return params, state, count + 1, grad
 
   init_state = opt.init(init_params)
   init_grad = jax.grad(fun)(init_params)
@@ -404,7 +483,7 @@ def _plain_lbfgs(
       dws = dws[1:]  # Pop left.
       dus = dus[1:]
 
-    grad_norm = jnp.sqrt(jnp.sum(g ** 2))
+    grad_norm = jnp.sqrt(jnp.sum(g**2))
 
     if grad_norm <= tol:
       break
@@ -498,7 +577,9 @@ class LBFGSTest(chex.TestCase):
     expected_precond_vec = precond_mat.dot(
         vec, precision=jax.lax.Precision.HIGHEST
     )
-    chex.assert_trees_all_close(plain_precond_vec, expected_precond_vec)
+    chex.assert_trees_all_close(
+        plain_precond_vec, expected_precond_vec, rtol=1e-5
+    )
 
   @parameterized.product(idx=[0, 1, 2, 3])
   def test_preconditioning_by_lbfgs_on_vectors(self, idx: int):
@@ -548,11 +629,11 @@ class LBFGSTest(chex.TestCase):
     )
 
     flat_dws = [
-        flatten_util.ravel_pytree(jtu.tree_map(lambda dw: dw[i], dws))[0]  # pylint: disable=cell-var-from-loop
+        flatten_util.ravel_pytree(jax.tree.map(lambda dw: dw[i], dws))[0]  # pylint: disable=cell-var-from-loop
         for i in range(m)
     ]
     flat_dus = [
-        flatten_util.ravel_pytree(jtu.tree_map(lambda du: du[i], dus))[0]  # pylint: disable=cell-var-from-loop
+        flatten_util.ravel_pytree(jax.tree.map(lambda du: du[i], dus))[0]  # pylint: disable=cell-var-from-loop
         for i in range(m)
     ]
     flat_dws, flat_dus = jnp.stack(flat_dws), jnp.stack(flat_dus)
@@ -631,7 +712,7 @@ class LBFGSTest(chex.TestCase):
       )
 
     def fun(x):
-      return otu.tree_sum(jtu.tree_map(fun_, x))
+      return otu.tree_sum(jax.tree.map(fun_, x))
 
     key = jrd.PRNGKey(0)
     init_array = jrd.normal(key, (2, 4))
@@ -641,13 +722,14 @@ class LBFGSTest(chex.TestCase):
     sol_arr, _ = _run_lbfgs_solver(opt, fun, init_array, maxiter=3)
     sol_tree, _ = _run_lbfgs_solver(opt, fun, init_tree, maxiter=3)
     sol_tree = jnp.stack((sol_tree[0], sol_tree[1]))
-    chex.assert_trees_all_close(sol_arr, sol_tree, rtol=5*1e-5, atol=5*1e-5)
+    chex.assert_trees_all_close(sol_arr, sol_tree, rtol=5 * 1e-5, atol=5 * 1e-5)
 
   @parameterized.product(scale_init_precond=[True, False])
   def test_multiclass_logreg(self, scale_init_precond):
     data = datasets.make_classification(
         n_samples=10, n_features=5, n_classes=3, n_informative=3, random_state=0
     )
+
     def fun(params):
       inputs, labels = data
       weights, bias = params
@@ -677,7 +759,7 @@ class LBFGSTest(chex.TestCase):
     def fun(weights):
       inputs, labels = data
       logits = jnp.dot(inputs, weights)
-      losses = jtu.tree_map(
+      losses = jax.tree.map(
           lambda z, y: jax.nn.softplus(jnp.where(y, -z, z)), logits, labels
       )
       return jnp.mean(losses)
@@ -780,8 +862,10 @@ class LBFGSTest(chex.TestCase):
     tol = 1e-5
     n = 2
     mat = jnp.eye(n) * 1e4
+
     def fun(x):
       return jnp.mean((mat @ x) ** 2)
+
     opt = alias.lbfgs()
     sol, _ = _run_lbfgs_solver(opt, fun, init_params=jnp.ones(n), tol=tol)
     chex.assert_trees_all_close(sol, jnp.zeros(n), atol=tol, rtol=tol)
